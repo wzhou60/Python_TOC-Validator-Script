@@ -304,10 +304,20 @@ class TOCValidatorApp:
                             # (e.g., "NAIVE REALISM: IS SEEING BELIEVING? 7 • WHEN OUR")
                             current_title_buffer += " " + line
 
-                    # FX 7: flush whatever remains at the END of each block
+                    # flush whatever remains at the END of each block
                     if current_title_buffer.strip():
                         self._parse_candidate_string(current_title_buffer.strip(), matches)
                         current_title_buffer = ""
+
+            # Deduplicate: keep first occurrence of each (normalized_title, page) pair
+            seen_keys = set()
+            unique_matches = []
+            for title, page in matches:
+                key = (self.normalize_text(title), page)
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    unique_matches.append((title, page))
+            matches = unique_matches
 
             if not matches:
                 self.root.after(0, lambda: self.log("Error: Could not detect any TOC entries. Check ranges."))
