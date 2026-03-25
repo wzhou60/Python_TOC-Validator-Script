@@ -9,7 +9,7 @@ from collections import Counter
 class TOCValidatorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Textbook TOC Validator")
+        self.root.title("Textbook TOC Validator (Exact Match & Inline Headings)")
         self.root.geometry("950x700")
         self.root.resizable(False, False)
 
@@ -36,7 +36,7 @@ class TOCValidatorApp:
         self.toc_range_entry.grid(row=1, column=1, sticky="w", padx=5, pady=5)
 
         # Page 1 Offset
-        ttk.Label(input_frame, text="PDF Page # for printed 'Page 1' (pit 1 if no page offset):").grid(row=2, column=0, sticky="w", pady=5)
+        ttk.Label(input_frame, text="PDF Page # for printed 'Page 1':").grid(row=2, column=0, sticky="w", pady=5)
         self.page1_entry = ttk.Entry(input_frame, width=15)
         self.page1_entry.grid(row=2, column=1, sticky="w", padx=5, pady=5)
 
@@ -90,6 +90,11 @@ class TOCValidatorApp:
         self.tree.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
+        # Define Color Tags for rows
+        self.tree.tag_configure("PASS", background="#d4edda", foreground="#155724")
+        self.tree.tag_configure("FAIL", background="#f8d7da", foreground="#721c24")
+        self.tree.tag_configure("ERROR", background="#fff3cd", foreground="#856404")
+
     def browse_file(self):
         file = filedialog.askopenfilename(filetypes=[("PDF Files", "*.pdf")])
         if file:
@@ -105,41 +110,42 @@ class TOCValidatorApp:
 
     def sort_column(self, col, reverse):
         """Sorts the table columns when clicked."""
-        # Get all items in the tree
         l =[(self.tree.set(k, col), k) for k in self.tree.get_children('')]
         
-        # Try to sort numerically if it's a page number, otherwise alphabetically
         try:
             l.sort(key=lambda t: int(t[0]), reverse=reverse)
         except ValueError:
             l.sort(reverse=reverse)
 
-        # Rearrange items in sorted positions
         for index, (val, k) in enumerate(l):
             self.tree.move(k, '', index)
 
-        # Reverse sort next time
         self.tree.heading(col, command=lambda: self.sort_column(col, not reverse))
 
     def apply_filter(self, event=None):
-        """Filters the table based on the dropdown selection."""
-        # Clear existing items in the table
+        """Filters the table based on the dropdown selection and applies colors."""
         for item in self.tree.get_children():
             self.tree.delete(item)
             
         selected_filter = self.filter_var.get().upper()
         
-        # Repopulate table
         for res in self.validation_results:
             status_text = res["Status"].upper()
-            # Determine if this row should be shown
+            
+            # Determine color tag
+            tag = "ERROR"
+            if "PASS" in status_text:
+                tag = "PASS"
+            elif "FAIL" in status_text:
+                tag = "FAIL"
+
             if selected_filter == "ALL" or selected_filter in status_text:
                 self.tree.insert("", "end", values=(
                     res["Chapter Title"], 
                     res["Expected Printed Page"], 
                     res["Calculated PDF Page"], 
                     res["Status"]
-                ))
+                ), tags=(tag,))
 
     def start_validation(self):
         if not self.filepath.get():
@@ -155,7 +161,6 @@ class TOCValidatorApp:
             messagebox.showerror("Error", "Please enter valid numbers for the page ranges.")
             return
 
-        # Reset UI
         self.run_btn.configure(state="disabled")
         self.export_btn.configure(state="disabled")
         self.validation_results =[]
@@ -170,13 +175,45 @@ class TOCValidatorApp:
         t = re.sub(r'[^\w\s]', ' ', t.lower())
         return re.sub(r'\s+', ' ', t).strip()
 
+    def _parse_candidate_string(self, candidate, matches):
+        """Breaks apart buffered lines to detect multiple inline headings separated by bullets/dots."""
+        # Split the string using bullet points, middle dots, or pipes as separators
+        sub_entries = re.split(r'\s*[•·▪◦|]\s*', candidate)
+        
+        buffer_no_num = ""
+        
+        for sub_entry in sub_entries:
+            sub_entry = sub_entry.strip()
+            if not sub_entry: continue
+            
+            # If a previous split didn't contain a number, it was likely a false split 
+            # (a bullet in the middle of a title). Stitch it back together!
+            if buffer_no_num:
+                sub_entry = buffer_no_num + " • " + sub_entry
+                buffer_no_num = ""
+                
+            page_match = re.search(r'(?:\.{2,}|\s+)(\d+)$', sub_entry)
+            if page_match:
+                page_val = int(page_match.group(1))
+                title_val = sub_entry[:page_match.start()].strip()
+                if title_val:
+                    matches.append((title_val, page_val))
+            else:
+                # If we split and this part doesn't have a number, hold onto it
+                buffer_no_num = sub_entry
+                
+        # Edge case: If the final part of the string didn't have a number, but it was passed in
+        if buffer_no_num:
+            page_match = re.search(r'(?:\.{2,}|\s+)(\d+)$', buffer_no_num)
+            if page_match:
+                matches.append((buffer_no_num[:page_match.start()].strip(), int(page_match.group(1))))
+
     def process_pdf(self):
         try:
             doc = fitz.open(self.filepath.get())
             total_pages = len(doc)
             matches =[]
 
-            # 1. EXTRACT TOC ENTRIES
             for page_num in range(self.toc_start, self.toc_end + 1):
                 if page_num >= total_pages: continue
                 page = doc[page_num]
@@ -198,16 +235,15 @@ class TOCValidatorApp:
 
                         if re.match(r'^\d+$', line):
                             if current_title_buffer.strip():
-                                matches.append((current_title_buffer.strip(), int(line)))
+                                candidate = (current_title_buffer.strip() + " " + line).strip()
+                                self._parse_candidate_string(candidate, matches)
                                 current_title_buffer = ""
                             continue
 
                         page_match = re.search(r'(?:\.{2,}|\s+)(\d+)$', line)
                         if page_match:
-                            page_num_val = page_match.group(1)
-                            rest_of_line = line[:page_match.start()].strip()
-                            full_title = (current_title_buffer + " " + rest_of_line).strip()
-                            if full_title: matches.append((full_title, int(page_num_val)))
+                            candidate = (current_title_buffer + " " + line).strip()
+                            self._parse_candidate_string(candidate, matches)
                             current_title_buffer = ""
                         else:
                             current_title_buffer += " " + line
@@ -222,7 +258,6 @@ class TOCValidatorApp:
             errors = 0
             success = 0
 
-            # 2. VALIDATE EACH ENTRY
             for title, printed_page in matches:
                 target_pdf_page = (printed_page - 1) + self.page1_pdf_index
                 status = ""
@@ -235,8 +270,8 @@ class TOCValidatorApp:
                     page_dict = page.get_text("dict")
                     page_height = page.rect.height
                     
-                    font_sizes = []
-                    text_spans = []
+                    font_sizes =[]
+                    text_spans =[]
 
                     for block in page_dict.get("blocks",[]):
                         if block.get("type") == 0:
@@ -244,7 +279,7 @@ class TOCValidatorApp:
                             if y0 < (page_height * 0.07) or y1 > (page_height * 0.93):
                                 continue
                             
-                            for line in block.get("lines", []):
+                            for line in block.get("lines",[]):
                                 for span in line.get("spans",[]):
                                     text = span.get("text", "").strip()
                                     if text:
@@ -274,7 +309,6 @@ class TOCValidatorApp:
                         status = "FAIL (Not Found)"
                         errors += 1
 
-                # Save to data list
                 row_data = {
                     "Chapter Title": title, 
                     "Expected Printed Page": printed_page,
@@ -283,8 +317,7 @@ class TOCValidatorApp:
                 }
                 self.validation_results.append(row_data)
 
-            # Update UI at the end
-            self.root.after(0, self.apply_filter) # Triggers population of the table
+            self.root.after(0, self.apply_filter)
             self.root.after(0, lambda: self.log(f"Validation Complete! Passed: {success} | Failed/Errors: {errors}"))
 
         except Exception as e:
