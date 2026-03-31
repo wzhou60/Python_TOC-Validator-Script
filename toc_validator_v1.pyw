@@ -4,6 +4,7 @@ import fitz  # PyMuPDF
 import re
 import threading
 import csv
+import unicodedata 
 from collections import Counter
 
 
@@ -11,16 +12,16 @@ class TOCValidatorApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Textbook TOC Validator (Exact Match & Inline Headings)")
-        self.root.geometry("1050x750")
+        self.root.geometry("1150x750")
         self.root.resizable(True, True)
 
         self.filepath = tk.StringVar()
-        self.validation_results = []
+        self.validation_results =[]
 
         self.setup_ui()
 
     def setup_ui(self):
-        # just setting up the UI stuff
+        # Configuration Frame
         input_frame = ttk.LabelFrame(self.root, text="Configuration", padding=(10, 10))
         input_frame.pack(fill="x", padx=10, pady=10)
 
@@ -36,15 +37,25 @@ class TOCValidatorApp:
         self.page1_entry = ttk.Entry(input_frame, width=15)
         self.page1_entry.grid(row=2, column=1, sticky="w", padx=5, pady=5)
 
+        # Button and Progress Bar Frame
         btn_frame = ttk.Frame(self.root)
-        btn_frame.pack(pady=5)
+        btn_frame.pack(pady=5, fill="x", padx=10)
 
         self.run_btn = ttk.Button(btn_frame, text="Validate Pagination", command=self.start_validation)
-        self.run_btn.pack(side="left", padx=10)
+        self.run_btn.pack(side="left", padx=(0, 10))
 
         self.export_btn = ttk.Button(btn_frame, text="Export to CSV", command=self.export_csv, state="disabled")
         self.export_btn.pack(side="left", padx=10)
 
+        # Progress Bar and Label
+        self.progress_var = tk.DoubleVar()
+        self.progress_bar = ttk.Progressbar(btn_frame, orient="horizontal", length=300, mode="determinate", variable=self.progress_var)
+        self.progress_bar.pack(side="left", padx=10)
+
+        self.progress_label = ttk.Label(btn_frame, text="0%")
+        self.progress_label.pack(side="left", padx=5)
+
+        # Results Frame
         results_frame = ttk.LabelFrame(self.root, text="Validation Results", padding=(10, 10))
         results_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -62,18 +73,21 @@ class TOCValidatorApp:
         self.log_text = tk.Text(results_frame, height=3, state="disabled", bg="#f0f0f0", fg="#333")
         self.log_text.pack(fill="x", pady=(0, 10))
 
-        columns = ("title", "printed", "pdf", "status")
+        # UPDATED COLUMNS: Added Chapter/Sec
+        columns = ("chapter", "title", "printed", "pdf", "status")
         self.tree = ttk.Treeview(results_frame, columns=columns, show="headings")
 
-        self.tree.heading("title",   text="Chapter Title",          command=lambda: self.sort_column("title", False))
-        self.tree.heading("printed", text="Printed ToC Page",       command=lambda: self.sort_column("printed", False))
-        self.tree.heading("pdf",     text="Calculated PDF Page",    command=lambda: self.sort_column("pdf", False))
-        self.tree.heading("status",  text="Validation Status",      command=lambda: self.sort_column("status", False))
+        self.tree.heading("chapter", text="Chapter/Section",        command=lambda: self.sort_column("chapter", False))
+        self.tree.heading("title",   text="Title",              command=lambda: self.sort_column("title", False))
+        self.tree.heading("printed", text="Printed ToC Page",   command=lambda: self.sort_column("printed", False))
+        self.tree.heading("pdf",     text="Page in PDF File",command=lambda: self.sort_column("pdf", False))
+        self.tree.heading("status",  text="Validation Status",  command=lambda: self.sort_column("status", False))
 
-        self.tree.column("title",   width=400, anchor="w")
+        self.tree.column("chapter", width=120, anchor="w")
+        self.tree.column("title",   width=350, anchor="w")
         self.tree.column("printed", width=100, anchor="center")
         self.tree.column("pdf",     width=130, anchor="center")
-        self.tree.column("status",  width=200, anchor="w")
+        self.tree.column("status",  width=180, anchor="w")
 
         scrollbar = ttk.Scrollbar(results_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -98,8 +112,13 @@ class TOCValidatorApp:
         self.log_text.configure(state="disabled")
         self.root.update_idletasks()
 
+    def update_progress(self, value, text_status=""):
+        self.progress_var.set(value)
+        if text_status:
+            self.progress_label.config(text=text_status)
+
     def sort_column(self, col, reverse):
-        rows = [(self.tree.set(k, col), k) for k in self.tree.get_children('')]
+        rows =[(self.tree.set(k, col), k) for k in self.tree.get_children('')]
         try:
             rows.sort(key=lambda t: int(t[0]), reverse=reverse)
         except ValueError:
@@ -124,7 +143,8 @@ class TOCValidatorApp:
 
             if selected_filter == "ALL" or selected_filter in status_text:
                 self.tree.insert("", "end", values=(
-                    res["Chapter Title"],
+                    res["Chapter/Sec"],
+                    res["Title"],
                     res["Expected Printed Page"],
                     res["Calculated PDF Page"],
                     res["Status"]
@@ -146,7 +166,9 @@ class TOCValidatorApp:
 
         self.run_btn.configure(state="disabled")
         self.export_btn.configure(state="disabled")
-        self.validation_results = []
+        
+        self.update_progress(0, "0%")
+        self.validation_results =[]
         for item in self.tree.get_children():
             self.tree.delete(item)
 
@@ -154,59 +176,26 @@ class TOCValidatorApp:
         threading.Thread(target=self.process_pdf, daemon=True).start()
 
     # ------------------------------------------------------------------
-    #         Corrected escape sequences in all regex patterns.
-    #         Previously used r'\\s+' (raw string + double backslash) which
-    #         matches a literal '\s', not whitespace.  Now uses r'\s+'.
-    # ------------------------------------------------------------------
     def normalize_text(self, text):
-        # Step 1: Join hard line-break hyphens 
-        t = re.sub(r'-\s*\n\s*', ' ', text)
-        
-        # Step 2: Normalize ALL hyphens/en-dashes/em-dashes to a plain space so that for example: "Many-Electron", "Many- Electron", "Many — Electron" all become "Many Electron"
-        t = re.sub(r'[-–—]', ' ', t)
-        
-        # Step 3: Strip remaining non-word characters and lowercase
-        t = re.sub(r'[^\w\s]', ' ', t.lower())
-        
-        # Step 4: Collapse whitespace
-        return re.sub(r'\s+', ' ', t).strip()
+        if not text:
+            return ""
+        t = unicodedata.normalize('NFKC', str(text))
+        t = t.lower()
+        t = re.sub(r'[^\w\+=]', '', t)
+        return t
     
     # ------------------------------------------------------------------
-    #      Strip leading bullet symbols from a title produced by splitting
-    #      on bullet separators (e.g., "• WHEN OUR..." → "WHEN OUR...").
-    # ------------------------------------------------------------------
     def _clean_title(self, title):
-        # Strip leading bullet/separator symbols
         title = re.sub(r'^[•·▪◦|]+\s*', '', title)
-        
-        # FIX 2: Strip leading hyphens/dashes that bleed in from wrapped PDF lines
         title = re.sub(r'^[-–—]+\s*', '', title)
-        
-        # FIX 1: Remove Private Use Area characters (Wingdings etc.) that render as □
-        # These are Unicode codepoints U+E000–U+F8FF (basic), U+F0000+ (supplementary)
         title = re.sub(r'[\ue000-\uf8ff]', '', title)
-        
-        # Also remove other common non-printable/replacement characters
         title = re.sub(r'[\ufffd\u25a1\u25a0\u0000-\u001f]', '', title)
-        
-        # Collapse any double spaces left behind
         title = re.sub(r'\s{2,}', ' ', title)
         return title.strip()
 
     # ------------------------------------------------------------------
-    # IMPROVED _parse_candidate_string
-    #   • FIX 2: Correct regex (r'...' with single backslash).
-    #   • FIX 3: Use _clean_title() to strip leading bullet chars.
-    #   • FIX 4: Stitch with a plain space instead of " • " so the bullet doesn't pollute the recovered title text.
-    # ------------------------------------------------------------------
-    def _parse_candidate_string(self, candidate, matches):
-        """
-        Splits a buffered TOC string on bullet separators (•, ·, ▪, ◦, |)
-        to extract multiple inline entries that may share a single text line.
-
-        Handles cases such as:
-            NAIVE REALISM: IS SEEING BELIEVING? 7 • WHEN OUR COMMON SENSE IS RIGHT 8
-        """
+    # Now tracking the "last_page" to perform continuity checks
+    def _parse_candidate_string(self, candidate, matches, last_page):
         sub_entries = re.split(r'\s*[•·▪◦|]\s*', candidate)
         buffer_no_num = ""
 
@@ -215,50 +204,70 @@ class TOCValidatorApp:
             if not sub_entry:
                 continue
 
-            # FIX 4: stitch with a plain space, not " • "
             if buffer_no_num:
                 sub_entry = buffer_no_num + " " + sub_entry
                 buffer_no_num = ""
 
-            # FIX 2: corrected regex — r'\.{2,}' for dot leaders, r'\s+' for space
             page_match = re.search(r'(?:\.{2,}|\s+)(\d+)$', sub_entry)
             if page_match:
-                page_val  = int(page_match.group(1))
-                title_val = self._clean_title(sub_entry[:page_match.start()].strip())
-                if title_val:
-                    matches.append((title_val, page_val))
+                candidate_page = int(page_match.group(1))
+                is_real_page = False
+                
+                # Check 1: Strong indicators (Dot leaders or multiple spaces)
+                if re.search(r'(?:\.{2,}|\s{2,}|\t)\d+$', sub_entry):
+                    is_real_page = True
+                # Check 2: Continuity indicator (Page >= last page, or a minor drop in number)
+                elif last_page == 0 or candidate_page >= last_page or (last_page - candidate_page) < 50:
+                    is_real_page = True
+                
+                if is_real_page:
+                    title_val = self._clean_title(sub_entry[:page_match.start()].strip())
+                    if title_val:
+                        matches.append((title_val, candidate_page))
+                        last_page = candidate_page
+                else:
+                    buffer_no_num = sub_entry
             else:
-                # No page number yet — this split segment is a partial title;
-                # hold it until the next segment supplies the page number.
                 buffer_no_num = sub_entry
 
-        # FIX 5: flush any leftover buffer (handles final segment with a page number)
         if buffer_no_num:
             page_match = re.search(r'(?:\.{2,}|\s+)(\d+)$', buffer_no_num)
             if page_match:
-                title_val = self._clean_title(buffer_no_num[:page_match.start()].strip())
-                if title_val:
-                    matches.append((title_val, int(page_match.group(1))))
+                candidate_page = int(page_match.group(1))
+                is_real_page = False
+                
+                if re.search(r'(?:\.{2,}|\s{2,}|\t)\d+$', buffer_no_num):
+                    is_real_page = True
+                elif last_page == 0 or candidate_page >= last_page or (last_page - candidate_page) < 50:
+                    is_real_page = True
+                    
+                if is_real_page:
+                    title_val = self._clean_title(buffer_no_num[:page_match.start()].strip())
+                    if title_val:
+                        matches.append((title_val, candidate_page))
+                        last_page = candidate_page
 
-    # ------------------------------------------------------------------
-    #   • Corrected page-number regex (single backslash).
-    #   • Flush the title buffer at the END of every block so
-    #            the last entry in a block is never silently dropped.
-    #   • Empty lines within a block also trigger a buffer flush,
-    #            preventing two separate entries from merging together.
+        return last_page
+
     # ------------------------------------------------------------------
     def process_pdf(self):
         try:
             doc = fitz.open(self.filepath.get())
             total_pages = len(doc)
-            matches = []
+            matches =[]
+
+            self.root.after(0, self.update_progress, 0, "Reading TOC...")
+
+            last_page = 0  # To track continuity
 
             for page_num in range(self.toc_start, self.toc_end + 1):
                 if page_num >= total_pages:
                     continue
                 page        = doc[page_num]
                 page_height = page.rect.height
-                blocks      = page.get_text("blocks")
+                
+                # UPDATE: sort=True strictly guarantees sequential Top-to-Bottom, Left-to-Right extraction
+                blocks = page.get_text("blocks", sort=True)
 
                 for block in blocks:
                     if block[6] != 0:
@@ -267,71 +276,91 @@ class TOCValidatorApp:
                     if y0 < (page_height * 0.07) or y1 > (page_height * 0.93):
                         continue
 
-                    block_text         = block[4]
+                    block_text = block[4]
                     current_title_buffer = ""
 
                     for line in block_text.split('\n'):
                         line = line.strip()
 
-                        # blank line inside a block = entry boundary, flush buffer
                         if not line:
                             if current_title_buffer.strip():
-                                self._parse_candidate_string(current_title_buffer.strip(), matches)
+                                last_page = self._parse_candidate_string(current_title_buffer.strip(), matches, last_page)
                                 current_title_buffer = ""
                             continue
 
                         if ".indd" in line.lower() or ".pdf" in line.lower():
                             continue
 
-                        # Standalone page number orphaned on its own line
+                        # Check for orphaned standalone page number on a line
                         if re.match(r'^\d+$', line):
-                            if current_title_buffer.strip():
-                                candidate = (current_title_buffer.strip() + " " + line).strip()
-                                self._parse_candidate_string(candidate, matches)
-                                current_title_buffer = ""
-                            continue
+                            candidate_page = int(line)
+                            # Continuity check for orphaned numbers
+                            if last_page == 0 or candidate_page >= last_page or (last_page - candidate_page) < 50:
+                                if current_title_buffer.strip():
+                                    candidate = (current_title_buffer.strip() + " " + line).strip()
+                                    last_page = self._parse_candidate_string(candidate, matches, last_page)
+                                    current_title_buffer = ""
+                                continue
+                            else:
+                                current_title_buffer += " " + line
+                                continue
 
-                        #  corrected regex for trailing page number
+                        # End-of-line page number detection
                         page_match = re.search(r'(?:\.{2,}|\s+)(\d+)$', line)
 
                         if page_match:
-                            # Line ends with a page number — complete entry (or group of entries)
-                            candidate = (current_title_buffer + " " + line).strip()
-                            self._parse_candidate_string(candidate, matches)
-                            current_title_buffer = ""
+                            candidate_page = int(page_match.group(1))
+                            is_real_page = False
+                            
+                            if re.search(r'(?:\.{2,}|\s{2,}|\t)\d+$', line):
+                                is_real_page = True
+                            elif last_page == 0 or candidate_page >= last_page or (last_page - candidate_page) < 50:
+                                is_real_page = True
+                                
+                            if is_real_page:
+                                candidate = (current_title_buffer + " " + line).strip()
+                                last_page = self._parse_candidate_string(candidate, matches, last_page)
+                                current_title_buffer = ""
+                            else:
+                                current_title_buffer += " " + line
                         else:
-                            # No trailing number yet — could be a wrapped continuation
-                            # (e.g., "NAIVE REALISM: IS SEEING BELIEVING? 7 • WHEN OUR")
                             current_title_buffer += " " + line
 
-                    # flush whatever remains at the END of each block
                     if current_title_buffer.strip():
-                        self._parse_candidate_string(current_title_buffer.strip(), matches)
+                        last_page = self._parse_candidate_string(current_title_buffer.strip(), matches, last_page)
                         current_title_buffer = ""
-
-            # Deduplicate: keep first occurrence of each (normalized_title, page) pair
-            seen_keys = set()
-            unique_matches = []
-            for title, page in matches:
-                key = (self.normalize_text(title), page)
-                if key not in seen_keys:
-                    seen_keys.add(key)
-                    unique_matches.append((title, page))
-            matches = unique_matches
 
             if not matches:
                 self.root.after(0, lambda: self.log("Error: Could not detect any TOC entries. Check ranges."))
                 self.root.after(0, lambda: self.run_btn.configure(state="normal"))
+                self.root.after(0, self.update_progress, 0, "0%")
                 return
 
-            self.root.after(0, lambda: self.log(f"Status: Found {len(matches)} TOC entries. Validating pages..."))
+            total_matches = len(matches)
+            self.root.after(0, lambda: self.log(f"Status: Found {total_matches} TOC entries. Validating pages..."))
 
             errors  = 0
             success = 0
 
-            for title, printed_page in matches:
+            for i, (raw_title, printed_page) in enumerate(matches):
                 target_pdf_page = (printed_page - 1) + self.page1_pdf_index
                 status = ""
+
+                # ==========================================================
+                # Extract Chapter/Section ID out of the raw Title
+                # matches formats like: "12.1 ", "APPENDIX A ", "Chapter 5: "
+                # ==========================================================
+                prefix_pattern = r'^((?:chapter|appendix|part|module|unit|section)\s+[a-zA-Z0-9\.\-]+|[0-9]+(?:\.[0-9]+)*)[\s:\-–—\.]+'
+                match = re.search(prefix_pattern, raw_title, flags=re.IGNORECASE)
+                
+                if match:
+                    chapter_sec = match.group(1).strip()
+                    clean_title = raw_title[match.end():].strip()
+                    if not clean_title:  # edge case fallback
+                        clean_title = raw_title
+                else:
+                    chapter_sec = ""
+                    clean_title = raw_title
 
                 if target_pdf_page >= total_pages or target_pdf_page < 0:
                     status = "ERROR (Out of Bounds)"
@@ -342,15 +371,15 @@ class TOCValidatorApp:
                     page_height = page.rect.height
 
                     font_sizes  = []
-                    text_spans  = []
+                    text_spans  =[]
 
-                    for blk in page_dict.get("blocks", []):
+                    for blk in page_dict.get("blocks",[]):
                         if blk.get("type") == 0:
                             y0, y1 = blk["bbox"][1], blk["bbox"][3]
                             if y0 < (page_height * 0.05) or y1 > (page_height * 0.95):
                                 continue
                             for ln in blk.get("lines", []):
-                                for span in ln.get("spans", []):
+                                for span in ln.get("spans",[]):
                                     text = span.get("text", "").strip()
                                     if text:
                                         size    = round(span.get("size", 0), 1)
@@ -369,17 +398,14 @@ class TOCValidatorApp:
                     full_text_clean    = self.normalize_text(full_text_raw)
                     heading_text_clean = self.normalize_text(heading_text_raw)
 
-                    toc_clean = self.normalize_text(title)
+                    # Validate using raw title (with prefix) OR clean title (no prefix)
+                    toc_clean = self.normalize_text(raw_title)
+                    toc_clean_no_prefix = self.normalize_text(clean_title)
 
-                    # Strip any leading section number (e.g. "1.1 " or "1 ") before matching,
-                    # so sub-headings like "1.1 What Is Psychology?" also match the page heading.
-                    # FIX: corrected regex r'^[\d.\s]+' (was r'^[\\d\\.\\s]+')
-                    toc_no_nums = self.normalize_text(re.sub(r'^[\d.\s]+', '', title))
-
-                    if toc_clean in heading_text_clean or (toc_no_nums and toc_no_nums in heading_text_clean):
+                    if toc_clean in heading_text_clean or (toc_clean_no_prefix and toc_clean_no_prefix in heading_text_clean):
                         status = "PASS (Heading Match)"
                         success += 1
-                    elif toc_clean in full_text_clean or (toc_no_nums and toc_no_nums in full_text_clean):
+                    elif toc_clean in full_text_clean or (toc_clean_no_prefix and toc_clean_no_prefix in full_text_clean):
                         status = "PASS (Exact Body Match)"
                         success += 1
                     else:
@@ -387,20 +413,27 @@ class TOCValidatorApp:
                         errors += 1
 
                 row_data = {
-                    "Chapter Title":        title,
+                    "Chapter/Sec":          chapter_sec,
+                    "Title":                clean_title,
                     "Expected Printed Page": printed_page,
                     "Calculated PDF Page":  target_pdf_page + 1,
                     "Status":               status
                 }
                 self.validation_results.append(row_data)
 
+                percent_complete = ((i + 1) / total_matches) * 100
+                progress_text = f"{int(percent_complete)}% ({i+1}/{total_matches})"
+                self.root.after(0, self.update_progress, percent_complete, progress_text)
+
             self.root.after(0, self.apply_filter)
             self.root.after(0, lambda: self.log(
                 f"Validation Complete! Passed: {success} | Failed/Errors: {errors}"
             ))
+            self.root.after(0, self.update_progress, 100, "Done!")
 
         except Exception as e:
             self.root.after(0, lambda: self.log(f"An error occurred: {str(e)}"))
+            self.root.after(0, self.update_progress, 0, "Error")
         finally:
             self.root.after(0, lambda: self.run_btn.configure(state="normal"))
             if self.validation_results:
@@ -422,7 +455,7 @@ class TOCValidatorApp:
         try:
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=[
-                    "Chapter Title", "Expected Printed Page",
+                    "Chapter/Sec", "Title", "Expected Printed Page",
                     "Calculated PDF Page", "Status"
                 ])
                 writer.writeheader()
