@@ -112,7 +112,7 @@ def launch_app():
 class TOCValidatorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Textbook TOC Validator (Exact Match & Inline Headings)")
+        self.root.title("Textbook TOC Validator")
         self.root.geometry("1150x750")
         self.root.resizable(True, True)
 
@@ -134,7 +134,7 @@ class TOCValidatorApp:
         self.toc_range_entry = ttk.Entry(input_frame, width=15)
         self.toc_range_entry.grid(row=1, column=1, sticky="w", padx=5, pady=5)
 
-        ttk.Label(input_frame, text="PDF Page # for printed 'Page 1':").grid(row=2, column=0, sticky="w", pady=5)
+        ttk.Label(input_frame, text="PDF Page # for printed 'Page 1' (put '1' if no offset):").grid(row=2, column=0, sticky="w", pady=5)
         self.page1_entry = ttk.Entry(input_frame, width=15)
         self.page1_entry.grid(row=2, column=1, sticky="w", padx=5, pady=5)
 
@@ -177,10 +177,10 @@ class TOCValidatorApp:
         columns = ("chapter", "title", "printed", "pdf", "status")
         self.tree = ttk.Treeview(results_frame, columns=columns, show="headings")
 
-        self.tree.heading("chapter", text="Chapter/Sec",        command=lambda: self.sort_column("chapter", False))
+        self.tree.heading("chapter", text="Chapter/Section",    command=lambda: self.sort_column("chapter", False))
         self.tree.heading("title",   text="Title",              command=lambda: self.sort_column("title", False))
         self.tree.heading("printed", text="Printed ToC Page",   command=lambda: self.sort_column("printed", False))
-        self.tree.heading("pdf",     text="Calculated PDF Page",command=lambda: self.sort_column("pdf", False))
+        self.tree.heading("pdf",     text="PDF Page",           command=lambda: self.sort_column("pdf", False))
         self.tree.heading("status",  text="Validation Status",  command=lambda: self.sort_column("status", False))
 
         self.tree.column("chapter", width=120, anchor="w")
@@ -566,5 +566,5 @@ class TOCValidatorApp:
 
 
 if __name__ == "__main__":
-    # Instead of running the app blindly, we pass it to the bootstrapper first!
+    # pass app to the bootstrapper first!
     check_and_launch()
