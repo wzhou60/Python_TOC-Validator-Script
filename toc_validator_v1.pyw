@@ -1,12 +1,113 @@
+import sys
+import subprocess
+import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import fitz  # PyMuPDF
 import re
-import threading
 import csv
 import unicodedata 
 from collections import Counter
 
+# ======================================================================
+# AUTO-INSTALLER BOOTSTRAP
+# ======================================================================
+
+def check_and_launch():
+    """Tries to import third-party packages. If missing, prompts the user to install them."""
+    try:
+        # Try to import PyMuPDF. If it fails, we trigger the installer.
+        global fitz
+        import fitz
+        
+        # If it succeeds, launch the app normally!
+        launch_app()
+    except ImportError:
+        prompt_installation()
+
+def prompt_installation():
+    """Shows a UI prompting the user to install missing packages."""
+    root = tk.Tk()
+    root.withdraw() # Hide the empty main window
+    
+    msg = (
+        "This application requires the 'PyMuPDF' package to read PDF files, "
+        "but it is not installed on this computer.\n\n"
+        "Would you like to automatically download and install it now?"
+    )
+    
+    if messagebox.askyesno("Missing Package Required", msg):
+        install_window = tk.Toplevel(root)
+        install_window.title("Installing Dependencies")
+        install_window.geometry("350x120")
+        install_window.resizable(False, False)
+        
+        # Center the loading window on the screen
+        install_window.update_idletasks()
+        x = (install_window.winfo_screenwidth() // 2) - (350 // 2)
+        y = (install_window.winfo_screenheight() // 2) - (120 // 2)
+        install_window.geometry(f"+{x}+{y}")
+        
+        tk.Label(install_window, text="Installing PyMuPDF...\nPlease wait, this may take a minute.", pady=10).pack()
+        
+        progress = ttk.Progressbar(install_window, mode='indeterminate')
+        progress.pack(fill='x', padx=20, pady=5)
+        progress.start()
+        
+        def install_worker():
+            try:
+                # creationflags=0x08000000 ensures NO black command prompt window flashes on screen
+                flags = 0x08000000 if sys.platform == "win32" else 0
+                subprocess.run([sys.executable, "-m", "pip", "install", "PyMuPDF"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    creationflags=flags
+                )
+                # Success! Tell the main thread to wrap up.
+                root.after(0, install_success, root, install_window)
+            except subprocess.CalledProcessError as e:
+                # Failed! Grab the error output.
+                err = e.stderr or e.stdout or "Unknown error"
+                root.after(0, install_failed, root, install_window, err)
+                
+        # Run the installation in the background so the UI doesn't freeze
+        threading.Thread(target=install_worker, daemon=True).start()
+        root.mainloop()
+    else:
+        root.destroy()
+        sys.exit()
+
+def install_success(root, install_window):
+    install_window.destroy()
+    messagebox.showinfo("Success", "Package installed successfully! The application will now start.")
+    root.quit()
+    root.destroy()
+    
+    # Import fitz now that it exists, then start the main app!
+    global fitz
+    import fitz
+    launch_app()
+
+def install_failed(root, install_window, err_msg):
+    install_window.destroy()
+    messagebox.showerror(
+        "Installation Failed", 
+        f"Failed to install PyMuPDF. IT policies might be blocking the installation.\n\nError details:\n{err_msg}"
+    )
+    root.quit()
+    root.destroy()
+    sys.exit()
+
+def launch_app():
+    """Starts the actual main application."""
+    main_root = tk.Tk()
+    app = TOCValidatorApp(main_root)
+    main_root.mainloop()
+
+
+# ======================================================================
+# MAIN APPLICATION CODE
+# ======================================================================
 
 class TOCValidatorApp:
     def __init__(self, root):
@@ -270,7 +371,6 @@ class TOCValidatorApp:
                     if block[6] != 0:
                         continue
                         
-                    # We still ignore headers/footers when extracting the TOC itself
                     y0, y1 = block[1], block[3]
                     if y0 < (page_height * 0.07) or y1 > (page_height * 0.93):
                         continue
@@ -366,11 +466,6 @@ class TOCValidatorApp:
 
                     for blk in page_dict.get("blocks",[]):
                         if blk.get("type") == 0:
-                            # =========================================================
-                            # FIX: Margin check completely removed here!
-                            # The script will now read text even if it touches the top
-                            # bounding edge of the page. This fixes massive Chapter Titles
-                            # =========================================================
                             for ln in blk.get("lines",[]):
                                 for span in ln.get("spans",[]):
                                     text = span.get("text", "").strip()
@@ -388,7 +483,6 @@ class TOCValidatorApp:
                         if s["size"] > body_size + 0.4 or s["bold"]
                     )
 
-                    # Tier 1 Exact Match Arrays (Spaces Stripped)
                     full_text_clean    = self.normalize_text(full_text_raw)
                     heading_text_clean = self.normalize_text(heading_text_raw)
                     toc_clean          = self.normalize_text(raw_title)
@@ -401,7 +495,6 @@ class TOCValidatorApp:
                         status = "PASS (Exact Body Match)"
                         success += 1
                     else:
-                        # Tier 2 Unordered Word Match
                         toc_words     = self.normalize_text(clean_title, keep_spaces=True).split()
                         heading_words = set(self.normalize_text(heading_text_raw, keep_spaces=True).split())
                         body_words    = set(self.normalize_text(full_text_raw, keep_spaces=True).split())
@@ -473,6 +566,5 @@ class TOCValidatorApp:
 
 
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = TOCValidatorApp(root)
-    root.mainloop()
+    # Instead of running the app blindly, we pass it to the bootstrapper first!
+    check_and_launch()
