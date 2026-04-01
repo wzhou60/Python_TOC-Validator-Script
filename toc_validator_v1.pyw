@@ -76,7 +76,7 @@ class TOCValidatorApp:
         columns = ("chapter", "title", "printed", "pdf", "status")
         self.tree = ttk.Treeview(results_frame, columns=columns, show="headings")
 
-        self.tree.heading("chapter", text="Chapter/Section",    command=lambda: self.sort_column("chapter", False))
+        self.tree.heading("chapter", text="Chapter/Sec",        command=lambda: self.sort_column("chapter", False))
         self.tree.heading("title",   text="Title",              command=lambda: self.sort_column("title", False))
         self.tree.heading("printed", text="Printed ToC Page",   command=lambda: self.sort_column("printed", False))
         self.tree.heading("pdf",     text="Calculated PDF Page",command=lambda: self.sort_column("pdf", False))
@@ -175,7 +175,6 @@ class TOCValidatorApp:
         threading.Thread(target=self.process_pdf, daemon=True).start()
 
     # ------------------------------------------------------------------
-    # NEW: keep_spaces flag allows us to use an Unordered Word Match fallback
     def normalize_text(self, text, keep_spaces=False):
         if not text:
             return ""
@@ -270,6 +269,8 @@ class TOCValidatorApp:
                 for block in blocks:
                     if block[6] != 0:
                         continue
+                        
+                    # We still ignore headers/footers when extracting the TOC itself
                     y0, y1 = block[1], block[3]
                     if y0 < (page_height * 0.07) or y1 > (page_height * 0.93):
                         continue
@@ -359,16 +360,17 @@ class TOCValidatorApp:
                 else:
                     page      = doc[target_pdf_page]
                     page_dict = page.get_text("dict", sort=True)
-                    page_height = page.rect.height
 
                     font_sizes  = []
                     text_spans  =[]
 
                     for blk in page_dict.get("blocks",[]):
                         if blk.get("type") == 0:
-                            y0, y1 = blk["bbox"][1], blk["bbox"][3]
-                            if y0 < (page_height * 0.05) or y1 > (page_height * 0.95):
-                                continue
+                            # =========================================================
+                            # FIX: Margin check completely removed here!
+                            # The script will now read text even if it touches the top
+                            # bounding edge of the page. This fixes massive Chapter Titles
+                            # =========================================================
                             for ln in blk.get("lines",[]):
                                 for span in ln.get("spans",[]):
                                     text = span.get("text", "").strip()
@@ -392,7 +394,6 @@ class TOCValidatorApp:
                     toc_clean          = self.normalize_text(raw_title)
                     toc_clean_no_pre   = self.normalize_text(clean_title)
 
-                    # TIER 1: Exact string search (Highly strict but ignores standard spacing logic)
                     if toc_clean in heading_text_clean or (toc_clean_no_pre and toc_clean_no_pre in heading_text_clean):
                         status = "PASS (Heading Match)"
                         success += 1
@@ -400,13 +401,11 @@ class TOCValidatorApp:
                         status = "PASS (Exact Body Match)"
                         success += 1
                     else:
-                        # TIER 2: Unordered Word Match (Solves jumbled side-by-side graphical PDF boxes)
-                        # We use keep_spaces=True to cleanly break strings into sets of words
+                        # Tier 2 Unordered Word Match
                         toc_words     = self.normalize_text(clean_title, keep_spaces=True).split()
                         heading_words = set(self.normalize_text(heading_text_raw, keep_spaces=True).split())
                         body_words    = set(self.normalize_text(full_text_raw, keep_spaces=True).split())
 
-                        # Ensure all structural words in the title exist somewhere in the header text
                         if toc_words and all(tw in heading_words for tw in toc_words):
                             status = "PASS (Unordered Heading Match)"
                             success += 1
@@ -430,9 +429,6 @@ class TOCValidatorApp:
                 progress_text = f"{int(percent_complete)}% ({i+1}/{total_matches})"
                 self.root.after(0, self.update_progress, percent_complete, progress_text)
 
-            # ==============================================================
-            # NEW: Automatically sort the results by printed ToC Page Number
-            # ==============================================================
             self.validation_results.sort(key=lambda x: x["Expected Printed Page"])
 
             self.root.after(0, self.apply_filter)
