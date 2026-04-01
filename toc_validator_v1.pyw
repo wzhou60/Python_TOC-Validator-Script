@@ -73,21 +73,20 @@ class TOCValidatorApp:
         self.log_text = tk.Text(results_frame, height=3, state="disabled", bg="#f0f0f0", fg="#333")
         self.log_text.pack(fill="x", pady=(0, 10))
 
-        # UPDATED COLUMNS: Added Chapter/Sec
         columns = ("chapter", "title", "printed", "pdf", "status")
         self.tree = ttk.Treeview(results_frame, columns=columns, show="headings")
 
-        self.tree.heading("chapter", text="Chapter/Section",        command=lambda: self.sort_column("chapter", False))
+        self.tree.heading("chapter", text="Chapter/Section",    command=lambda: self.sort_column("chapter", False))
         self.tree.heading("title",   text="Title",              command=lambda: self.sort_column("title", False))
         self.tree.heading("printed", text="Printed ToC Page",   command=lambda: self.sort_column("printed", False))
-        self.tree.heading("pdf",     text="Page in PDF File",command=lambda: self.sort_column("pdf", False))
+        self.tree.heading("pdf",     text="Calculated PDF Page",command=lambda: self.sort_column("pdf", False))
         self.tree.heading("status",  text="Validation Status",  command=lambda: self.sort_column("status", False))
 
         self.tree.column("chapter", width=120, anchor="w")
         self.tree.column("title",   width=350, anchor="w")
         self.tree.column("printed", width=100, anchor="center")
         self.tree.column("pdf",     width=130, anchor="center")
-        self.tree.column("status",  width=180, anchor="w")
+        self.tree.column("status",  width=220, anchor="w")
 
         scrollbar = ttk.Scrollbar(results_frame, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=scrollbar.set)
@@ -176,12 +175,17 @@ class TOCValidatorApp:
         threading.Thread(target=self.process_pdf, daemon=True).start()
 
     # ------------------------------------------------------------------
-    def normalize_text(self, text):
+    # NEW: keep_spaces flag allows us to use an Unordered Word Match fallback
+    def normalize_text(self, text, keep_spaces=False):
         if not text:
             return ""
         t = unicodedata.normalize('NFKC', str(text))
         t = t.lower()
-        t = re.sub(r'[^\w\+=]', '', t)
+        if keep_spaces:
+            t = re.sub(r'[^\w\+=\s]', '', t)
+            t = re.sub(r'\s+', ' ', t).strip()
+        else:
+            t = re.sub(r'[^\w\+=]', '', t)
         return t
     
     # ------------------------------------------------------------------
@@ -194,7 +198,6 @@ class TOCValidatorApp:
         return title.strip()
 
     # ------------------------------------------------------------------
-    # Now tracking the "last_page" to perform continuity checks
     def _parse_candidate_string(self, candidate, matches, last_page):
         sub_entries = re.split(r'\s*[•·▪◦|]\s*', candidate)
         buffer_no_num = ""
@@ -213,10 +216,8 @@ class TOCValidatorApp:
                 candidate_page = int(page_match.group(1))
                 is_real_page = False
                 
-                # Check 1: Strong indicators (Dot leaders or multiple spaces)
                 if re.search(r'(?:\.{2,}|\s{2,}|\t)\d+$', sub_entry):
                     is_real_page = True
-                # Check 2: Continuity indicator (Page >= last page, or a minor drop in number)
                 elif last_page == 0 or candidate_page >= last_page or (last_page - candidate_page) < 50:
                     is_real_page = True
                 
@@ -257,16 +258,13 @@ class TOCValidatorApp:
             matches =[]
 
             self.root.after(0, self.update_progress, 0, "Reading TOC...")
-
-            last_page = 0  # To track continuity
+            last_page = 0 
 
             for page_num in range(self.toc_start, self.toc_end + 1):
                 if page_num >= total_pages:
                     continue
                 page        = doc[page_num]
                 page_height = page.rect.height
-                
-                # UPDATE: sort=True strictly guarantees sequential Top-to-Bottom, Left-to-Right extraction
                 blocks = page.get_text("blocks", sort=True)
 
                 for block in blocks:
@@ -291,10 +289,8 @@ class TOCValidatorApp:
                         if ".indd" in line.lower() or ".pdf" in line.lower():
                             continue
 
-                        # Check for orphaned standalone page number on a line
                         if re.match(r'^\d+$', line):
                             candidate_page = int(line)
-                            # Continuity check for orphaned numbers
                             if last_page == 0 or candidate_page >= last_page or (last_page - candidate_page) < 50:
                                 if current_title_buffer.strip():
                                     candidate = (current_title_buffer.strip() + " " + line).strip()
@@ -305,7 +301,6 @@ class TOCValidatorApp:
                                 current_title_buffer += " " + line
                                 continue
 
-                        # End-of-line page number detection
                         page_match = re.search(r'(?:\.{2,}|\s+)(\d+)$', line)
 
                         if page_match:
@@ -346,17 +341,13 @@ class TOCValidatorApp:
                 target_pdf_page = (printed_page - 1) + self.page1_pdf_index
                 status = ""
 
-                # ==========================================================
-                # Extract Chapter/Section ID out of the raw Title
-                # matches formats like: "12.1 ", "APPENDIX A ", "Chapter 5: "
-                # ==========================================================
                 prefix_pattern = r'^((?:chapter|appendix|part|module|unit|section)\s+[a-zA-Z0-9\.\-]+|[0-9]+(?:\.[0-9]+)*)[\s:\-–—\.]+'
                 match = re.search(prefix_pattern, raw_title, flags=re.IGNORECASE)
                 
                 if match:
                     chapter_sec = match.group(1).strip()
                     clean_title = raw_title[match.end():].strip()
-                    if not clean_title:  # edge case fallback
+                    if not clean_title:
                         clean_title = raw_title
                 else:
                     chapter_sec = ""
@@ -367,7 +358,7 @@ class TOCValidatorApp:
                     errors += 1
                 else:
                     page      = doc[target_pdf_page]
-                    page_dict = page.get_text("dict")
+                    page_dict = page.get_text("dict", sort=True)
                     page_height = page.rect.height
 
                     font_sizes  = []
@@ -378,7 +369,7 @@ class TOCValidatorApp:
                             y0, y1 = blk["bbox"][1], blk["bbox"][3]
                             if y0 < (page_height * 0.05) or y1 > (page_height * 0.95):
                                 continue
-                            for ln in blk.get("lines", []):
+                            for ln in blk.get("lines",[]):
                                 for span in ln.get("spans",[]):
                                     text = span.get("text", "").strip()
                                     if text:
@@ -395,22 +386,36 @@ class TOCValidatorApp:
                         if s["size"] > body_size + 0.4 or s["bold"]
                     )
 
+                    # Tier 1 Exact Match Arrays (Spaces Stripped)
                     full_text_clean    = self.normalize_text(full_text_raw)
                     heading_text_clean = self.normalize_text(heading_text_raw)
+                    toc_clean          = self.normalize_text(raw_title)
+                    toc_clean_no_pre   = self.normalize_text(clean_title)
 
-                    # Validate using raw title (with prefix) OR clean title (no prefix)
-                    toc_clean = self.normalize_text(raw_title)
-                    toc_clean_no_prefix = self.normalize_text(clean_title)
-
-                    if toc_clean in heading_text_clean or (toc_clean_no_prefix and toc_clean_no_prefix in heading_text_clean):
+                    # TIER 1: Exact string search (Highly strict but ignores standard spacing logic)
+                    if toc_clean in heading_text_clean or (toc_clean_no_pre and toc_clean_no_pre in heading_text_clean):
                         status = "PASS (Heading Match)"
                         success += 1
-                    elif toc_clean in full_text_clean or (toc_clean_no_prefix and toc_clean_no_prefix in full_text_clean):
+                    elif toc_clean in full_text_clean or (toc_clean_no_pre and toc_clean_no_pre in full_text_clean):
                         status = "PASS (Exact Body Match)"
                         success += 1
                     else:
-                        status = "FAIL (Not Found)"
-                        errors += 1
+                        # TIER 2: Unordered Word Match (Solves jumbled side-by-side graphical PDF boxes)
+                        # We use keep_spaces=True to cleanly break strings into sets of words
+                        toc_words     = self.normalize_text(clean_title, keep_spaces=True).split()
+                        heading_words = set(self.normalize_text(heading_text_raw, keep_spaces=True).split())
+                        body_words    = set(self.normalize_text(full_text_raw, keep_spaces=True).split())
+
+                        # Ensure all structural words in the title exist somewhere in the header text
+                        if toc_words and all(tw in heading_words for tw in toc_words):
+                            status = "PASS (Unordered Heading Match)"
+                            success += 1
+                        elif toc_words and all(tw in body_words for tw in toc_words):
+                            status = "PASS (Unordered Body Match)"
+                            success += 1
+                        else:
+                            status = "FAIL (Not Found)"
+                            errors += 1
 
                 row_data = {
                     "Chapter/Sec":          chapter_sec,
@@ -424,6 +429,11 @@ class TOCValidatorApp:
                 percent_complete = ((i + 1) / total_matches) * 100
                 progress_text = f"{int(percent_complete)}% ({i+1}/{total_matches})"
                 self.root.after(0, self.update_progress, percent_complete, progress_text)
+
+            # ==============================================================
+            # NEW: Automatically sort the results by printed ToC Page Number
+            # ==============================================================
+            self.validation_results.sort(key=lambda x: x["Expected Printed Page"])
 
             self.root.after(0, self.apply_filter)
             self.root.after(0, lambda: self.log(
