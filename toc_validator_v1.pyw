@@ -9,17 +9,14 @@ import unicodedata
 from collections import Counter
 
 # ======================================================================
-# AUTO-INSTALLER BOOTSTRAP
+# AUTO-INSTALLER BOOTSTRAP LOGIC
 # ======================================================================
 
 def check_and_launch():
     """Tries to import third-party packages. If missing, prompts the user to install them."""
     try:
-        # Try to import PyMuPDF. If it fails, we trigger the installer.
         global fitz
         import fitz
-        
-        # If it succeeds, launch the app normally!
         launch_app()
     except ImportError:
         prompt_installation()
@@ -27,7 +24,7 @@ def check_and_launch():
 def prompt_installation():
     """Shows a UI prompting the user to install missing packages."""
     root = tk.Tk()
-    root.withdraw() # Hide the empty main window
+    root.withdraw() 
     
     msg = (
         "This application requires the 'PyMuPDF' package to read PDF files, "
@@ -41,7 +38,6 @@ def prompt_installation():
         install_window.geometry("350x120")
         install_window.resizable(False, False)
         
-        # Center the loading window on the screen
         install_window.update_idletasks()
         x = (install_window.winfo_screenwidth() // 2) - (350 // 2)
         y = (install_window.winfo_screenheight() // 2) - (120 // 2)
@@ -55,7 +51,6 @@ def prompt_installation():
         
         def install_worker():
             try:
-                # creationflags=0x08000000 ensures NO black command prompt window flashes on screen
                 flags = 0x08000000 if sys.platform == "win32" else 0
                 subprocess.run([sys.executable, "-m", "pip", "install", "PyMuPDF"],
                     check=True,
@@ -63,14 +58,11 @@ def prompt_installation():
                     text=True,
                     creationflags=flags
                 )
-                # Success! Tell the main thread to wrap up.
                 root.after(0, install_success, root, install_window)
             except subprocess.CalledProcessError as e:
-                # Failed! Grab the error output.
                 err = e.stderr or e.stdout or "Unknown error"
                 root.after(0, install_failed, root, install_window, err)
                 
-        # Run the installation in the background so the UI doesn't freeze
         threading.Thread(target=install_worker, daemon=True).start()
         root.mainloop()
     else:
@@ -83,7 +75,6 @@ def install_success(root, install_window):
     root.quit()
     root.destroy()
     
-    # Import fitz now that it exists, then start the main app!
     global fitz
     import fitz
     launch_app()
@@ -99,7 +90,6 @@ def install_failed(root, install_window, err_msg):
     sys.exit()
 
 def launch_app():
-    """Starts the actual main application."""
     main_root = tk.Tk()
     app = TOCValidatorApp(main_root)
     main_root.mainloop()
@@ -112,7 +102,7 @@ def launch_app():
 class TOCValidatorApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Textbook TOC Validator")
+        self.root.title("Textbook TOC Validator (Exact Match & Inline Headings)")
         self.root.geometry("1150x750")
         self.root.resizable(True, True)
 
@@ -122,7 +112,6 @@ class TOCValidatorApp:
         self.setup_ui()
 
     def setup_ui(self):
-        # Configuration Frame
         input_frame = ttk.LabelFrame(self.root, text="Configuration", padding=(10, 10))
         input_frame.pack(fill="x", padx=10, pady=10)
 
@@ -134,11 +123,10 @@ class TOCValidatorApp:
         self.toc_range_entry = ttk.Entry(input_frame, width=15)
         self.toc_range_entry.grid(row=1, column=1, sticky="w", padx=5, pady=5)
 
-        ttk.Label(input_frame, text="PDF Page # for printed 'Page 1' (put '1' if no offset):").grid(row=2, column=0, sticky="w", pady=5)
+        ttk.Label(input_frame, text="PDF Page # for printed 'Page 1':").grid(row=2, column=0, sticky="w", pady=5)
         self.page1_entry = ttk.Entry(input_frame, width=15)
         self.page1_entry.grid(row=2, column=1, sticky="w", padx=5, pady=5)
 
-        # Button and Progress Bar Frame
         btn_frame = ttk.Frame(self.root)
         btn_frame.pack(pady=5, fill="x", padx=10)
 
@@ -148,7 +136,6 @@ class TOCValidatorApp:
         self.export_btn = ttk.Button(btn_frame, text="Export to CSV", command=self.export_csv, state="disabled")
         self.export_btn.pack(side="left", padx=10)
 
-        # Progress Bar and Label
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(btn_frame, orient="horizontal", length=300, mode="determinate", variable=self.progress_var)
         self.progress_bar.pack(side="left", padx=10)
@@ -156,7 +143,6 @@ class TOCValidatorApp:
         self.progress_label = ttk.Label(btn_frame, text="0%")
         self.progress_label.pack(side="left", padx=5)
 
-        # Results Frame
         results_frame = ttk.LabelFrame(self.root, text="Validation Results", padding=(10, 10))
         results_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -177,10 +163,10 @@ class TOCValidatorApp:
         columns = ("chapter", "title", "printed", "pdf", "status")
         self.tree = ttk.Treeview(results_frame, columns=columns, show="headings")
 
-        self.tree.heading("chapter", text="Chapter/Section",    command=lambda: self.sort_column("chapter", False))
+        self.tree.heading("chapter", text="Chapter/Sec",        command=lambda: self.sort_column("chapter", False))
         self.tree.heading("title",   text="Title",              command=lambda: self.sort_column("title", False))
         self.tree.heading("printed", text="Printed ToC Page",   command=lambda: self.sort_column("printed", False))
-        self.tree.heading("pdf",     text="PDF Page",           command=lambda: self.sort_column("pdf", False))
+        self.tree.heading("pdf",     text="Calculated PDF Page",command=lambda: self.sort_column("pdf", False))
         self.tree.heading("status",  text="Validation Status",  command=lambda: self.sort_column("status", False))
 
         self.tree.column("chapter", width=120, anchor="w")
@@ -199,7 +185,6 @@ class TOCValidatorApp:
         self.tree.tag_configure("FAIL",  background="#f8d7da", foreground="#721c24")
         self.tree.tag_configure("ERROR", background="#fff3cd", foreground="#856404")
 
-    # ------------------------------------------------------------------
     def browse_file(self):
         file = filedialog.askopenfilename(filetypes=[("PDF Files", "*.pdf")])
         if file:
@@ -275,7 +260,6 @@ class TOCValidatorApp:
         self.log("Status: Extracting TOC Data from PDF...")
         threading.Thread(target=self.process_pdf, daemon=True).start()
 
-    # ------------------------------------------------------------------
     def normalize_text(self, text, keep_spaces=False):
         if not text:
             return ""
@@ -288,7 +272,6 @@ class TOCValidatorApp:
             t = re.sub(r'[^\w\+=]', '', t)
         return t
     
-    # ------------------------------------------------------------------
     def _clean_title(self, title):
         title = re.sub(r'^[•·▪◦|]+\s*', '', title)
         title = re.sub(r'^[-–—]+\s*', '', title)
@@ -297,7 +280,7 @@ class TOCValidatorApp:
         title = re.sub(r'\s{2,}', ' ', title)
         return title.strip()
 
-    # ------------------------------------------------------------------
+    # Reverted back to the highly stable, pre-dissection engine.
     def _parse_candidate_string(self, candidate, matches, last_page):
         sub_entries = re.split(r'\s*[•·▪◦|]\s*', candidate)
         buffer_no_num = ""
@@ -350,7 +333,6 @@ class TOCValidatorApp:
 
         return last_page
 
-    # ------------------------------------------------------------------
     def process_pdf(self):
         try:
             doc = fitz.open(self.filepath.get())
@@ -365,7 +347,9 @@ class TOCValidatorApp:
                     continue
                 page        = doc[page_num]
                 page_height = page.rect.height
-                blocks = page.get_text("blocks", sort=True)
+                
+                # prevents PyMuPDF from cross-contaminating text columns horizontally in multi-column TOCs.
+                blocks = page.get_text("blocks")
 
                 for block in blocks:
                     if block[6] != 0:
@@ -376,6 +360,8 @@ class TOCValidatorApp:
                         continue
 
                     block_text = block[4]
+                    
+                    # Ensure buffer resets cleanly at the start of every text block
                     current_title_buffer = ""
 
                     for line in block_text.split('\n'):
@@ -422,9 +408,9 @@ class TOCValidatorApp:
                         else:
                             current_title_buffer += " " + line
 
+                    # Flush block buffer securely
                     if current_title_buffer.strip():
                         last_page = self._parse_candidate_string(current_title_buffer.strip(), matches, last_page)
-                        current_title_buffer = ""
 
             if not matches:
                 self.root.after(0, lambda: self.log("Error: Could not detect any TOC entries. Check ranges."))
@@ -459,13 +445,15 @@ class TOCValidatorApp:
                     errors += 1
                 else:
                     page      = doc[target_pdf_page]
+                    
                     page_dict = page.get_text("dict", sort=True)
 
-                    font_sizes  = []
+                    font_sizes  =[]
                     text_spans  =[]
 
                     for blk in page_dict.get("blocks",[]):
                         if blk.get("type") == 0:
+                            # 5% Margin cut-off completely removed to prevent giant Chapter 1 text from being ignored
                             for ln in blk.get("lines",[]):
                                 for span in ln.get("spans",[]):
                                     text = span.get("text", "").strip()
@@ -522,6 +510,7 @@ class TOCValidatorApp:
                 progress_text = f"{int(percent_complete)}% ({i+1}/{total_matches})"
                 self.root.after(0, self.update_progress, percent_complete, progress_text)
 
+            # Sorts output by the page layout to guarantee sequential outputs 
             self.validation_results.sort(key=lambda x: x["Expected Printed Page"])
 
             self.root.after(0, self.apply_filter)
@@ -538,7 +527,6 @@ class TOCValidatorApp:
             if self.validation_results:
                 self.root.after(0, lambda: self.export_btn.configure(state="normal"))
 
-    # ------------------------------------------------------------------
     def export_csv(self):
         if not self.validation_results:
             return
@@ -566,5 +554,4 @@ class TOCValidatorApp:
 
 
 if __name__ == "__main__":
-    # pass app to the bootstrapper first!
     check_and_launch()
