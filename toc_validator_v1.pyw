@@ -12,8 +12,8 @@ from collections import Counter
 # AUTO-INSTALLER BOOTSTRAP LOGIC
 # ======================================================================
 
+"""Tries to import third-party packages. If missing, prompts the user to install them."""
 def check_and_launch():
-    """Tries to import third-party packages. If missing, prompts the user to install them."""
     try:
         global fitz
         import fitz
@@ -21,8 +21,8 @@ def check_and_launch():
     except ImportError:
         prompt_installation()
 
+"""Shows a UI prompting the user to install missing packages."""
 def prompt_installation():
-    """Shows a UI prompting the user to install missing packages."""
     root = tk.Tk()
     root.withdraw() 
     
@@ -69,6 +69,7 @@ def prompt_installation():
         root.destroy()
         sys.exit()
 
+
 def install_success(root, install_window):
     install_window.destroy()
     messagebox.showinfo("Success", "Package installed successfully! The application will now start.")
@@ -89,6 +90,7 @@ def install_failed(root, install_window, err_msg):
     root.destroy()
     sys.exit()
 
+# builds UI and runs the app
 def launch_app():
     main_root = tk.Tk()
     app = TOCValidatorApp(main_root)
@@ -111,6 +113,7 @@ class TOCValidatorApp:
 
         self.setup_ui()
 
+    """ Sets up the UI"""
     def setup_ui(self):
         input_frame = ttk.LabelFrame(self.root, text="Configuration", padding=(10, 10))
         input_frame.pack(fill="x", padx=10, pady=10)
@@ -185,11 +188,12 @@ class TOCValidatorApp:
         self.tree.tag_configure("FAIL",  background="#f8d7da", foreground="#721c24")
         self.tree.tag_configure("ERROR", background="#fff3cd", foreground="#856404")
 
+    """ Opens the file browser for user to select PDF"""
     def browse_file(self):
         file = filedialog.askopenfilename(filetypes=[("PDF Files", "*.pdf")])
         if file:
             self.filepath.set(file)
-
+ 
     def log(self, message):
         self.log_text.configure(state="normal")
         self.log_text.delete(1.0, "end")
@@ -197,11 +201,13 @@ class TOCValidatorApp:
         self.log_text.configure(state="disabled")
         self.root.update_idletasks()
 
+# Updates the progress bar to the given numeric value (0–100) and optionally updates the percentage label text.
     def update_progress(self, value, text_status=""):
         self.progress_var.set(value)
         if text_status:
             self.progress_label.config(text=text_status)
 
+# Sorts the results table by the given column either numerically or alphabetically, and rewires the column header to toggle sort direction on the next click.
     def sort_column(self, col, reverse):
         rows =[(self.tree.set(k, col), k) for k in self.tree.get_children('')]
         try:
@@ -212,6 +218,7 @@ class TOCValidatorApp:
             self.tree.move(k, '', index)
         self.tree.heading(col, command=lambda: self.sort_column(col, not reverse))
 
+# Clears the results table and repopulates it from the full results list, showing only rows whose status matches the currently selected filter (All, Pass, Fail, or Error).
     def apply_filter(self, event=None):
         for item in self.tree.get_children():
             self.tree.delete(item)
@@ -235,6 +242,7 @@ class TOCValidatorApp:
                     res["Status"]
                 ), tags=(tag,))
 
+    """ Main function that orchestrates the validation process. It reads user inputs, extracts TOC data from the specified PDF pages, validates each entry against the actual PDF content, and updates the UI with results and progress.""" 
     def start_validation(self):
         if not self.filepath.get():
             messagebox.showerror("Error", "Please select a PDF file.")
@@ -260,6 +268,7 @@ class TOCValidatorApp:
         self.log("Status: Extracting TOC Data from PDF...")
         threading.Thread(target=self.process_pdf, daemon=True).start()
 
+    """ Normalizes text by applying Unicode NFKC normalization, converting to lowercase, and removing non-alphanumeric characters (except spaces if keep_spaces=True). This helps improve matching accuracy by standardizing different representations of similar text."""
     def normalize_text(self, text, keep_spaces=False):
         if not text:
             return ""
@@ -272,6 +281,8 @@ class TOCValidatorApp:
             t = re.sub(r'[^\w\+=]', '', t)
         return t
     
+    """Cleans a TOC title by removing common leading bullet characters, dashes, and various non-printable or placeholder Unicode characters. 
+    It also collapses multiple spaces into a single space and trims leading/trailing whitespace. This helps ensure that the extracted titles are in a consistent format for matching against PDF extracted text."""
     def _clean_title(self, title):
         title = re.sub(r'^[•·▪◦|]+\s*', '', title)
         title = re.sub(r'^[-–—]+\s*', '', title)
@@ -280,7 +291,7 @@ class TOCValidatorApp:
         title = re.sub(r'\s{2,}', ' ', title)
         return title.strip()
 
-    # Reverted back to the highly stable, pre-dissection engine.
+    """Parses a candidate TOC entry string, which may contain multiple sub-entries separated by common delimiters."""
     def _parse_candidate_string(self, candidate, matches, last_page):
         sub_entries = re.split(r'\s*[•·▪◦|]\s*', candidate)
         buffer_no_num = ""
@@ -294,6 +305,7 @@ class TOCValidatorApp:
                 sub_entry = buffer_no_num + " " + sub_entry
                 buffer_no_num = ""
 
+            # Looks for a number at the very end of the string that is preceded by either a series of dots or whitespace. 
             page_match = re.search(r'(?:\.{2,}|\s+)(\d+)$', sub_entry)
             if page_match:
                 candidate_page = int(page_match.group(1))
@@ -333,6 +345,7 @@ class TOCValidatorApp:
 
         return last_page
 
+    """Processes the PDF to extract TOC entries from the specified page range, validates them against the actual PDF content, and updates the UI with results and progress."""
     def process_pdf(self):
         try:
             doc = fitz.open(self.filepath.get())
@@ -342,19 +355,26 @@ class TOCValidatorApp:
             self.root.after(0, self.update_progress, 0, "Reading TOC...")
             last_page = 0 
 
+        # Loop through each page in the TOC range the user specified
             for page_num in range(self.toc_start, self.toc_end + 1):
+                # Skip this page number if it somehow exceeds the document length
                 if page_num >= total_pages:
                     continue
+                
+                # Open the page and get its height in points (used for margin filtering below)                
                 page        = doc[page_num]
                 page_height = page.rect.height
                 
-                # prevents PyMuPDF from cross-contaminating text columns horizontally in multi-column TOCs.
+                # Use blocks to prevent PyMuPDF from cross-contaminating text columns horizontally in multi-column TOCs.
                 blocks = page.get_text("blocks")
 
+                # Iterate through each text block on the page, applying filters to exclude blocks that are likely to be headers/footers (based on vertical position) or non-text elements. Then process each line within the block to extract candidate TOC entries, using a buffer to handle multi-line titles and applying heuristics to determine if a line is likely a page number or part of the title. Valid candidates are cleaned and stored in the matches list for later validation against the actual PDF content.
                 for block in blocks:
+                    # Filter out non-text blocks. block[6] is the block type — 0 means text. Skip anything that is not a text block.
                     if block[6] != 0:
                         continue
-                        
+
+                    # Filter out blocks that are likely headers or footers based on their vertical position on the page. We assume that TOC entries will be within the central 86% of the page height, so we exclude blocks that start above 7% from the top or end below 93% from the top.    
                     y0, y1 = block[1], block[3]
                     if y0 < (page_height * 0.07) or y1 > (page_height * 0.93):
                         continue
@@ -367,15 +387,19 @@ class TOCValidatorApp:
                     for line in block_text.split('\n'):
                         line = line.strip()
 
+                        # If the line is empty, it may indicate a break between TOC entries. If we have accumulated text in the buffer, we should attempt to parse it as a candidate entry before clearing the buffer and moving on. This helps ensure that multi-line titles are properly captured even if there are blank lines between them.
                         if not line:
                             if current_title_buffer.strip():
                                 last_page = self._parse_candidate_string(current_title_buffer.strip(), matches, last_page)
                                 current_title_buffer = ""
                             continue
 
+                        #ignores lines that contain .pdf or .indd as those are internal Pearson things.
                         if ".indd" in line.lower() or ".pdf" in line.lower():
                             continue
 
+                        # If the line consists solely of digits, it is likely a page number that has been separated from its title due to formatting issues. 
+                        # We can apply heuristics to determine if this number is likely a valid page number for a TOC entry (e.g., it should be greater than or equal to the last valid page number we found, and not unreasonably far back). 
                         if re.match(r'^\d+$', line):
                             candidate_page = int(line)
                             if last_page == 0 or candidate_page >= last_page or (last_page - candidate_page) < 50:
@@ -399,11 +423,13 @@ class TOCValidatorApp:
                             elif last_page == 0 or candidate_page >= last_page or (last_page - candidate_page) < 50:
                                 is_real_page = True
                                 
+                        # If it seems valid, we can append it to the current title buffer and attempt to parse the combined string as a candidate entry.
                             if is_real_page:
                                 candidate = (current_title_buffer + " " + line).strip()
                                 last_page = self._parse_candidate_string(candidate, matches, last_page)
                                 current_title_buffer = ""
                             else:
+                                #  If it doesn't seem valid as a page number, we can treat it as part of the title and add it to the buffer for further processing.
                                 current_title_buffer += " " + line
                         else:
                             current_title_buffer += " " + line
@@ -424,16 +450,21 @@ class TOCValidatorApp:
             errors  = 0
             success = 0
 
+            # Loop through each extracted TOC entry, calculate the corresponding PDF page number based on the user-provided "Page 1" index, and validate the entry by checking if the title appears in the text extracted from that PDF page.
+            # The validation checks for exact matches in both headings and body text, as well as unordered word matches to account for formatting differences. 
+            # The results of each validation are stored in a list and the UI is updated with progress and final results once all entries have been processed.
             for i, (raw_title, printed_page) in enumerate(matches):
+                # uses the offset provided by the user to calculate the actual PDF page index that corresponds to the printed page number in the TOC. This allows the validation to check the correct page in the PDF for each TOC entry, even if the PDF's internal page numbering does not start at 1 or if there are front matter pages that are not counted in the printed page numbers.
                 target_pdf_page = (printed_page - 1) + self.page1_pdf_index
                 status = ""
-
+                # Uses a regular expression to attempt to extract a chapter or section prefix from the raw TOC title, such as "Chapter 1" or "Section 2.3". 
                 prefix_pattern = r'^((?:chapter|appendix|part|module|unit|section)\s+[a-zA-Z0-9\.\-]+|[0-9]+(?:\.[0-9]+)*)[\s:\-–—\.]+'
                 match = re.search(prefix_pattern, raw_title, flags=re.IGNORECASE)
                 
                 if match:
                     chapter_sec = match.group(1).strip()
                     clean_title = raw_title[match.end():].strip()
+                    # If the cleaning process results in an empty title fall back to using the raw title to ensure we have something to match against in the PDF content.
                     if not clean_title:
                         clean_title = raw_title
                 else:
@@ -444,6 +475,8 @@ class TOCValidatorApp:
                     status = "ERROR (Out of Bounds)"
                     errors += 1
                 else:
+                    # Extracts the text from the target PDF page and analyzes the font sizes and styles to differentiate between headings and body text. 
+                    # It then normalizes the extracted text and compares it against the cleaned TOC title using various matching strategies (exact match, unordered word match) to determine if the TOC entry is correctly represented on that page. The validation status is set accordingly based on the results of these checks.
                     page      = doc[target_pdf_page]
                     
                     page_dict = page.get_text("dict", sort=True)
@@ -452,8 +485,8 @@ class TOCValidatorApp:
                     text_spans  =[]
 
                     for blk in page_dict.get("blocks",[]):
+                        # only process text blocks
                         if blk.get("type") == 0:
-                            # 5% Margin cut-off completely removed to prevent giant Chapter 1 text from being ignored
                             for ln in blk.get("lines",[]):
                                 for span in ln.get("spans",[]):
                                     text = span.get("text", "").strip()
@@ -463,40 +496,52 @@ class TOCValidatorApp:
                                         font_sizes.extend([size] * len(text))
                                         text_spans.append({"text": text, "size": size, "bold": is_bold})
 
+                    # Find the most common font size on the page — this is the body text size.
+                    # Everything larger than this (or bold) will be treated as a heading.
                     body_size = Counter(font_sizes).most_common(1)[0][0] if font_sizes else 0
 
+                    # Build two versions of the page text:
+                    # full_text_raw    — every word on the page joined together
+                    # heading_text_raw — only text that is larger than body size or is bold
                     full_text_raw    = " ".join(s["text"] for s in text_spans)
                     heading_text_raw = " ".join(
                         s["text"] for s in text_spans
                         if s["size"] > body_size + 0.4 or s["bold"]
                     )
-
+                    # Normalise all four text strings so comparisons are case-insensitive and not thrown off by punctuation or special characters
                     full_text_clean    = self.normalize_text(full_text_raw)
                     heading_text_clean = self.normalize_text(heading_text_raw)
                     toc_clean          = self.normalize_text(raw_title)
                     toc_clean_no_pre   = self.normalize_text(clean_title)
 
+                    # Use 4 layer search to find TOC title on page
+                    # 1: Full title found in the heading text
                     if toc_clean in heading_text_clean or (toc_clean_no_pre and toc_clean_no_pre in heading_text_clean):
                         status = "PASS (Heading Match)"
                         success += 1
+                    
+                    # 2: Full title found anywhere on the page            
                     elif toc_clean in full_text_clean or (toc_clean_no_pre and toc_clean_no_pre in full_text_clean):
                         status = "PASS (Exact Body Match)"
                         success += 1
                     else:
+                        # split the title into words and check if all words are present in either the heading or body text (unordered match). This allows for some flexibility in matching titles that may be reformatted or have minor differences in punctuation while still ensuring that all key terms are present.
                         toc_words     = self.normalize_text(clean_title, keep_spaces=True).split()
                         heading_words = set(self.normalize_text(heading_text_raw, keep_spaces=True).split())
                         body_words    = set(self.normalize_text(full_text_raw, keep_spaces=True).split())
 
+                        # 3: All words from the title found in the heading text (any order)
                         if toc_words and all(tw in heading_words for tw in toc_words):
                             status = "PASS (Unordered Heading Match)"
                             success += 1
+                        # 4: All words from the title found anywhere on the page (any order)
                         elif toc_words and all(tw in body_words for tw in toc_words):
                             status = "PASS (Unordered Body Match)"
                             success += 1
                         else:
                             status = "FAIL (Not Found)"
                             errors += 1
-
+                # Save this entry's result as a dictionary and append to the full results list
                 row_data = {
                     "Chapter/Sec":          chapter_sec,
                     "Title":                clean_title,
@@ -510,7 +555,7 @@ class TOCValidatorApp:
                 progress_text = f"{int(percent_complete)}% ({i+1}/{total_matches})"
                 self.root.after(0, self.update_progress, percent_complete, progress_text)
 
-            # Sorts output by the page layout to guarantee sequential outputs 
+            # Sorts output by the page number so they appear in order
             self.validation_results.sort(key=lambda x: x["Expected Printed Page"])
 
             self.root.after(0, self.apply_filter)
@@ -527,6 +572,7 @@ class TOCValidatorApp:
             if self.validation_results:
                 self.root.after(0, lambda: self.export_btn.configure(state="normal"))
 
+    """Allows the user to export the validation results to a CSV file. It prompts the user to choose a save location and filename, then writes the results with appropriate headers. If the export is successful, it shows a confirmation message; if there is an error during saving, it shows an error message with details."""
     def export_csv(self):
         if not self.validation_results:
             return
@@ -553,5 +599,6 @@ class TOCValidatorApp:
             messagebox.showerror("Error", f"Failed to save CSV:\n{str(e)}")
 
 
+"""Runs the package check first on launch"""
 if __name__ == "__main__":
     check_and_launch()
